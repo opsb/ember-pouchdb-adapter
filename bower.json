@@ -1,9 +1,9 @@
 {
   "name": "ember-pouchdb-adapter",
-  "version": "0.1.4",
+  "version": "1.0.0",
   "dependencies": {
-    "ember": "~1.0.0-rc.6",
-    "ember-data-shim": "~0.0.13",
+    "ember": "~1",
+    "ember-data-shim": "~1.0.0",
     "node-uuid": "*"
   },
   "ignore": [

@@ -1,7 +1,7 @@
 // global variables
-var List, list, lists,
-    Item, item, items,
-    store, adapter, clock;
+var list, lists,
+    item, items,
+    store, adapter;
 
 module('DS.PouchDBAdapter', {
 
@@ -12,44 +12,37 @@ module('DS.PouchDBAdapter', {
       start();
     });
 
-    List = DS.Model.extend({
+
+    App.List = DS.Model.extend({
       name: DS.attr('string'),
       b: DS.attr('boolean'),
-      tags: DS.attr('array')
+      tags: DS.attr(),
+      items: DS.hasMany('item')
     });
 
-    List.toString = function() {
-      return 'App.List';
-    };
+    // App.List.toString = function() {
+    //   return 'App.List';
+    // };
 
-    Item = DS.Model.extend({
-      name: DS.attr('string')
+    App.Item = DS.Model.extend({
+      name: DS.attr('string'),
+      list: DS.belongsTo('list')
     });
 
-    Item.toString = function() {
-      return 'App.Item';
-    };
+    // App.Item.toString = function() {
+    //   return 'App.Item';
+    // };
 
-    List.reopen({
-      items: DS.hasMany(Item)
-    });
-
-    Item.reopen({
-      list: DS.belongsTo(List)
-    });
-
-    adapter = DS.PouchDBAdapter.create({
+    App.ApplicationAdapter = DS.PouchDBAdapter.extend({
       databaseName: 'ember-pouchdb-test'
     });
 
-    store = DS.Store.create({adapter: adapter});
-      // FIXME We somehow have to set this explicitly
-    DS.set('defaultStore', store);
+    store = App.__container__.lookup("store:main");
+
   },
 
   teardown: function() {
-    adapter.destroy();
-    store.destroy();
+    App.reset();
 
     list = null;
     lists = null;
@@ -62,220 +55,222 @@ test('existence', function() {
 });
 
 asyncTest('create and find', function() {
-  var transaction = store.transaction();
-  transaction.createRecord(List, { id: 'l2', name: 'two', b: true });
-  var record = transaction.createRecord(List, { id: 'l1', name: 'one', b: true });
 
-  record.one('didCreate', function() {
-    store.destroy();
-    store = DS.Store.create({adapter: adapter});
-    DS.set('defaultStore', store);
+  Ember.run(function(){
+    var record = store.createRecord('list', { id: 'l2', name: 'two', b: true});
+    record.save();
 
-    list = List.find('l1');
-    list.one('didLoad', function() {
-      equal(list.get('name'), 'one', 'Record loaded');
+    record = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+
+    record.save().then(function() {
+      App.reset();
+
+      store.find('list', 'l1').then(function(list) {
+        equal(list.get('name'), 'one', 'Record loaded');
+        start();
+      }, function(err){
+        ok(false, err);
+        start();
+      });
+    }, function(err){
+      ok(false, err);
       start();
     });
   });
-
-  transaction.commit();
 });
 
 asyncTest('create with generated id', function() {
-  var transaction = store.transaction();
-  var record = transaction.createRecord(List, { name: 'one' });
+  Ember.run(function(){
+    var record = store.createRecord('list', { name: 'one' });
 
-  record.one('didCreate', function() {
-    ok(record.get('id').length === 36, 'UUID assigned');
-    start();
+    record.save().then(function(response) {
+      ok(response.get('id').length === 36, 'UUID assigned');
+      start();
+    }, function(err){
+      ok(false, err);
+      start();
+    });
   });
 
-  transaction.commit();
 });
 
 asyncTest('create and find with hasMany', function() {
-  var transaction = store.transaction();
-  var list = transaction.createRecord(List, { id: 'l1', name: 'one', b: true });
-  transaction.createRecord(Item, { id: 'i1', name: 'one', list: list });
+  Ember.run(function(){
+    var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    var item = store.createRecord('item', { id: 'i1', name: 'one', list: list });
 
-  list.one('didCreate', function() {
-    store.destroy();
-    store = DS.Store.create({adapter: adapter});
-    DS.set('defaultStore', store);
+    Ember.RSVP.all([item.save(), list.save()]).then(function() {
+      App.reset();
+      store.unloadAll('item');
+      store.unloadAll('list');
 
-    list = List.find('l1');
-    list.one('didLoad', function() {
-      var items = list.get('items');
-      equal(items.get('length'), 1, 'hasMany items should be loaded');
+      store.find('list', 'l1').then(function(list) {
+        var items = list.get('items');
+        equal(items.get('length'), 1, 'hasMany items should be loaded');
+        start();
+      }, function(err){
+        ok(false, err);
+        start();
+      });
+    }, function(err){
+      ok(false, err);
       start();
     });
   });
-
-  transaction.commit();
 });
 
 asyncTest('create and findMany', function() {
-  var transaction = store.transaction();
-  transaction.createRecord(List, { id: 'l1', name: 'one', b: true });
-  transaction.createRecord(List, { id: 'l2', name: 'two', b: true });
-  var record = transaction.createRecord(List, { id: 'l3', name: 'three', b: true });
+  Ember.run(function(){
+    var list1 = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    var list2 = store.createRecord('list', { id: 'l2', name: 'two', b: true });
+    var list3 = store.createRecord('list', { id: 'l3', name: 'three', b: true });
 
-  record.one('didCreate', function() {
-    store.destroy();
-    store = DS.Store.create({adapter: adapter});
-    DS.set('defaultStore', store);
+    Ember.RSVP.all([list1.save(), list2.save(), list3.save()]).then(function() {
+      App.reset();
+      store.unloadAll('list');
 
-    lists = store.findMany(List, ['l1', 'l3']);
-    lists.one('didLoad', function() {
-      deepEqual(lists.map(function(list) { return list.get('id'); }), ['l1', 'l3'], 'records with ids should be loaded');
+      store.findByIds('list', ['l1', 'l3']).then(function(lists){
+        deepEqual(lists.mapBy('id'), ['l1', 'l3'], 'records with ids should be loaded');
+        start();
+      }, function(err){
+        ok(false, err);
+        start();
+      });
+
+    }, function(err){
+      ok(false, err);
       start();
     });
 
   });
-
-  transaction.commit();
 });
 
 asyncTest('create and update', function() {
-  var transaction = store.transaction();
-  var record = transaction.createRecord(List, { id: 'l1', name: 'one', b: true });
+  Ember.run(function(){
+    var record = store.createRecord('list', { id: 'l1', name: 'one', b: true });
 
-  record.one('didCreate', function() {
-    record.set('name', 'one and a half');
+    record.save().then(function(record2) {
+      record2.set('name', 'one and a half');
 
-    store.save();
-
-    record.one('didUpdate', function() {
-      ok(true, 'Record was updated');
-      start();
+      record2.save().then(function(record3) {
+        ok(true, 'Record was updated');
+        start();
+      });
     });
   });
 
-  transaction.commit();
 });
 
 asyncTest('create find and update', function() {
-  var transaction = store.transaction();
-  var record = transaction.createRecord(List, { id: 'l1', name: 'one', b: true });
+  Ember.run(function(){
+    var record = store.createRecord('list', { id: 'l1', name: 'one', b: true });
 
-  record.one('didCreate', function() {
-    store.destroy();
-    store = DS.Store.create({adapter: adapter});
-    DS.set('defaultStore', store);
+    record.save().then(function() {
+      App.reset();
+      store.unloadAll('item');
 
-    list = List.find('l1');
-    list.one('didLoad', function() {
-      list.set('name', 'one and a half');
+      store.find('list', 'l1').then(function(list){
+        list.set('name', 'one and a half');
 
-      store.save();
-
-      list.one('didUpdate', function() {
-        ok(true, 'Record was updated');
-        start();
+        list.save().then(function() {
+          ok(true, 'Record was updated');
+          start();
+        });
       });
     });
-  });
 
-  transaction.commit();
+  });
 });
 
 asyncTest('create and multiple update', function() {
-  var transaction = store.transaction();
-  var record = transaction.createRecord(List, { id: 'l1', name: 'one', b: true });
+  Ember.run(function(){
+    var record = store.createRecord('list', { id: 'l1', name: 'one', b: true });
 
-  record.one('didCreate', function() {
-    record.set('name', 'one and a half');
+    record.save().then(function(record2) {
+      record2.set('name', 'one and a half');
 
-    store.save();
+      record2.save().then(function(record3) {
+        record3.set('name', 'two');
 
-    record.one('didUpdate', function() {
-      record.set('name', 'two');
+        record3.save().then(function(record4) {
+          ok(true, 'Record was updated');
+          start();
+        });
+      });
+    });
+  });
+});
 
-      store.save();
+asyncTest('create and findAll', function() {
+  Ember.run(function(){
+    item = store.createRecord('item', { id: 'i1', name: 'one' });
+    list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    var record = store.createRecord('list', { id: 'l2', name: 'two', b: false });
 
-      record.one('didUpdate', function() {
-        ok(true, 'Record was updated');
+    Ember.RSVP.all([item.save(), list.save(), record.save()]).then(function() {
+      App.reset();
+      store.unloadAll('item');
+      store.unloadAll('list');
+
+      store.find("list").then(function(lists) {
+        deepEqual(lists.mapBy('id'), ['l1', 'l2'], 'Records were loaded');
         start();
       });
     });
   });
-
-  transaction.commit();
-});
-
-asyncTest('create and findAll', function() {
-  var transaction = store.transaction();
-  transaction.createRecord(Item, { id: 'i1', name: 'one' });
-  transaction.createRecord(List, { id: 'l1', name: 'one', b: true });
-  var record = transaction.createRecord(List, { id: 'l2', name: 'two', b: false });
-
-  record.one('didCreate', function() {
-    store.destroy();
-    store = DS.Store.create({adapter: adapter});
-    DS.set('defaultStore', store);
-
-    lists = List.find();
-    lists.then(function() {
-      setTimeout(function() {
-        deepEqual(lists.map(function(list) { return list.get('id'); }), ['l1', 'l2'], 'Records were loaded');
-        start();
-      }, 10);
-    });
-  });
-
-  transaction.commit();
 });
 
 asyncTest('create and delete', function() {
-  var record = List.createRecord({ id: 'l1', name: 'one', b: true });
+  Ember.run(function(){
+    var record = store.createRecord('list', { id: 'l1', name: 'one', b: true });
 
-  record.one('didCreate', function() {
-    record.deleteRecord();
-    record.get('transaction').commit();
-
-    record.one('didDelete', function() {
-      ok(true, 'Record was updated');
-      start();
+    record.save().then(function() {
+      record.deleteRecord();
+      record.save().then(function(record2) {
+        ok(record2.get('isDeleted'), 'Record was updated');
+        start();
+      });
     });
   });
-
-  record.get('transaction').commit();
 });
 
 asyncTest('create and findQuery', function() {
-  List.createRecord({ id: 'l1', name: 'one', b: true });
-  var record = List.createRecord({ id: 'l2', name: 'two', b: false });
+  Ember.run(function(){
+    var list1 = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    var list2 = store.createRecord('list', { id: 'l2', name: 'two', b: false });
 
-  record.one('didCreate', function() {
-    lists = List.find({name: 'two'});
+    Ember.RSVP.all([list1.save(), list2.save()]).then(function() {
+      App.reset();
+      store.unloadAll('list');
 
-    lists.then(function() {
-      equal(lists.get('length'), 1, 'Record loaded');
-      start();
+      store.find('list', {name: 'two'}).then(function(result) {
+        equal(result.get('length'), 1, 'Record loaded');
+        var content = result.get('content');
+        equal(content[0].get('name'), 'two', 'Wrong record loaded');
+        start();
+      });
     });
   });
-
-  record.get('transaction').commit();
 });
 
 /*
 
 test('findQuery', function() {
-  lists = store.findQuery(List, {name: /one|two/});
+  lists = store.findQuery(App.List, {name: /one|two/});
   assertQuery(2);
 
-  lists = store.findQuery(List, {name: /.+/, id: /l1/});
+  lists = store.findQuery(App.List, {name: /.+/, id: /l1/});
   assertQuery();
 
-  lists = store.findQuery(List, {name: 'one'});
+  lists = store.findQuery(App.List, {name: 'one'});
   assertQuery();
 
-  lists = store.findQuery(List, {b: true});
+  lists = store.findQuery(App.List, {b: true});
   assertQuery();
 });
 
 test('findAll', function() {
-  lists = store.findAll(List);
+  lists = store.findAll(App.List);
   clock.tick(1);
   assertListsLength(3);
   assertStoredLists();
@@ -303,16 +298,16 @@ test('deleteRecords', function() {
   assertState('deleted');
   assertListNotFoundInStorage();
 
-  lists = store.findAll(List);
+  lists = store.findAll(App.List);
   clock.tick(1);
 
   assertListsLength(3);
 });
 
 test('bulkCommits changes', function() {
-  var listToUpdate = List.find('l1');
-  var listToDelete = List.find('l2');
-  List.createRecord({name: 'bulk new'}); // will find later
+  var listToUpdate = App.List.find('l1');
+  var listToDelete = App.List.find('l2');
+  App.List.createRecord({name: 'bulk new'}); // will find later
 
   clock.tick(1);
 
@@ -321,8 +316,8 @@ test('bulkCommits changes', function() {
 
   commit();
 
-  var updatedList = List.find('l1');
-  var newListQuery = store.findQuery(List, {name: 'bulk new'});
+  var updatedList = App.List.find('l1');
+  var newListQuery = store.findQuery(App.List, {name: 'bulk new'});
   clock.tick(1);
   var newList = newListQuery.objectAt(0);
 
@@ -333,7 +328,7 @@ test('bulkCommits changes', function() {
 });
 
 test('load hasMany association', function() {
-  list = List.find('l1');
+  list = App.List.find('l1');
   clock.tick(1);
 
   assertStoredList();
@@ -354,7 +349,7 @@ test('load belongsTo association', function() {
 });
 
 test('saves belongsTo and hasMany associations', function() {
-  list = List.find('l1');
+  list = App.List.find('l1');
   clock.tick(1);
   item = Item.createRecord({name: '3', list: list});
   commit();
@@ -368,7 +363,7 @@ test('QUOTA_EXCEEDED_ERR when storage is full', function() {
   var handler = sinon.spy();
   adapter.on('QUOTA_EXCEEDED_ERR', handler);
 
-  list = List.createRecord({name: n100k});
+  list = App.List.createRecord({name: n100k});
 
   assertState('new');
   store.commit();

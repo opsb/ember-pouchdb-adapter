@@ -1,80 +1,86 @@
 (function() {
   var get = Ember.get, set = Ember.set;
+  var map = Ember.EnumerableUtils.map;
+  var forEach = Ember.EnumerableUtils.forEach;
 
-  DS.PouchDBSerializer = DS.FixtureSerializer.extend({
+  DS.PouchDBSerializer = DS.JSONSerializer.extend({
+    primaryKey: '_id',
+
+    typeForRoot: function(root) {
+      var camelized = Ember.String.camelize(root);
+      return Ember.String.singularize(camelized);
+    },
 
     /**
      * Override to get the document revision that is stored on the record for PouchDB updates
      */
-    addAttributes: function(data, record) {
-      this._super(data, record);
-      data._rev = get(record, '_rev');
+    serialize: function(record, options) {
+      var json = this._super(record, options);
+      json._rev = get(record, 'data')['_rev'];
+      // Store the type in the value so that we can index it on read
+      json.emberDataType = Ember.String.decamelize(record.constructor.typeKey);
+      return json;
     },
 
-    addBelongsTo: function(data, record, key, relationship) {
-      data[relationship.key] = get(get(record, key), 'id');
-    },
+    serializeHasMany: function(record, json, relationship){
+      this._super(record, json, relationship);
 
-    addHasMany: function(data, record, key, relationship) {
-      var ids = [];
-      get(record, relationship.key).forEach(function(item) {
-        ids.push(get(item, 'id'));
-      });
+      var key = relationship.key;
 
-      data[relationship.key] = ids;
-    },
+      var relationshipType = DS.RelationshipChange.determineRelationshipType(record.constructor, relationship);
 
-    addId: function(data, key, id) {
-      data[key] = id;
-      data._id = id;
-    },
-
-    addType: function(data, type) {
-      data['emberDataType'] = type.toString();
-    },
-
-    /**
-     * Add the document revision to the record on materialization
-     *
-     * TODO Check if this is a good idea or a special Document mixin should be used
-     * that defines an attribute that will do just this.
-     */
-    materializeAttributes: function(record, serialized, prematerialized) {
-      this._super(record, serialized, prematerialized);
-      set(record, '_rev', serialized._rev);
-    },
-
-    /**
-     * Work around the DOMException 25 problem with Ember extended native array
-     */
-    serializeValue: function(value, attributeType) {
-      if (attributeType === 'array') {
-        if (value && value.concat) {
-          value = value.concat([]);
-        }
+      if (relationshipType === 'manyToOne') {
+        json[key] = get(record, key).mapBy('id').concat([]);
       }
-      return value;
     },
 
-    /**
-     * Correctly deserialize array values to Ember arrays for easier usage
-     */
-    deserializeValue: function(value, attributeType) {
-      if (attributeType === 'array') {
-        if (value instanceof Array) {
-          return Ember.A(value);
-        }
+    normalize: function(type, hash) {
+      hash.id = hash.id || hash._id;
+      delete hash._id;
+
+      return this._super(type, hash);
+    },
+
+    extractSingle: function(store, type, payload) {
+      payload = this.normalize(type, payload);
+
+      return this._super(store, type, payload);
+    },
+
+    extractArray: function(store, type, payload){
+      delete payload['type'];
+      var array =  map(payload, function(hash){
+        return this.extractSingle(store, type, hash);
+      }, this);
+
+      return this._super(store, type, array);
+    },
+
+    normalizePayload: function(type, payload) {
+      return payload;
+    },
+
+    pushPayload: function(store, payload) {
+      payload = this.normalizePayload(null, payload);
+
+      for (var prop in payload) {
+        var typeName = this.typeForRoot(prop),
+          type = store.modelFor(typeName);
+
+        var normalizedArray = map(payload[prop], function(hash) {
+          return this.normalize(type, hash, prop);
+        }, this);
+        store.pushMany(typeName, normalizedArray);
       }
-      return value;
     }
   });
 
   /**
-   * Based on https://github.com/panayi/ember-data-indexeddb-adapter and https://github.com/wycats/indexeddb-experiment
+   * Initially based on https://github.com/panayi/ember-data-indexeddb-adapter and https://github.com/wycats/indexeddb-experiment
    *
    */
   DS.PouchDBAdapter = DS.Adapter.extend({
-    serializer: DS.PouchDBSerializer,
+    defaultSerializer: "_pouchdb",
 
     /**
      Hook used by the store to generate client-side IDs. This simplifies
@@ -98,15 +104,19 @@
      */
     createRecord: function(store, type, record) {
       var self = this,
-          hash = this.serialize(record, { includeId: true, includeType: true });
+          data = self.serialize(record, { includeId: true, includeType: true});
 
-      this._getDb().put(hash, function(err, response) {
-        if (!err) {
-          set(record, '_rev', response.rev);
-          self.didCreateRecord(store, type, record);
-        } else {
-          console.error(err);
-        }
+      return new Ember.RSVP.Promise(function(resolve, reject){
+        self._getDb().put(data, function(err, response) {
+          if (!err) {
+            data = Ember.copy(data, true);
+            data._rev = response.rev;
+            Ember.run(null, resolve, data);
+          } else {
+            err = self._errMsg(err);
+            Ember.run(null, reject, err);
+          }
+        });
       });
     },
 
@@ -121,37 +131,42 @@
       var self = this,
           hash = this.serialize(record, { includeId: true, includeType: true });
 
-      // Store the type in the value so that we can index it on read
-      hash['emberDataType'] = type.toString();
-
-      this._getDb().put(hash, function(err, response) {
-        if (!err) {
-          set(record, '_rev', response.rev);
-          self.didUpdateRecord(store, type, record);
-        } else {
-          console.error(err);
-        }
+      return new Ember.RSVP.Promise(function(resolve, reject){
+        self._getDb().put(hash, function(err, response) {
+          if (!err) {
+            hash = Ember.copy(hash);
+            hash._rev = response.rev;
+            Ember.run(null, resolve, hash);
+          } else {
+            err = self._errMsg(err);
+            Ember.run(null, reject, err);
+          }
+        });
       });
     },
 
     deleteRecord: function(store, type, record) {
-      var self = this;
+      var self = this,
+          hash = this.serialize(record, { includeId: true, includeType: true });
 
-      this._getDb().remove({
-        _id: get(record, 'id'),
-        _rev: get(record, '_rev')
-      }, function(err, response) {
-        if (err) {
-          console.error(err);
-        } else {
-          set(record, '_rev', response.rev);
-          self.didDeleteRecord(store, type, record);
-        }
+      return new Ember.RSVP.Promise(function(resolve, reject){
+        self._getDb().remove(hash, function(err, response) {
+          if (err) {
+            err = self._errMsg(err);
+            Ember.run(null, reject, err);
+          } else {
+            hash = Ember.copy(hash);
+            hash._rev = response.rev;
+            Ember.run(null, resolve, hash);
+          }
+        });
       });
     },
 
     find: function(store, type, id) {
-      this.findMany(store, type, [id]);
+      return this.findMany(store, type, [id]).then(function(data){
+        return data[0] || {};
+      });
     },
 
     findMany: function(store, type, ids) {
@@ -159,17 +174,62 @@
           db = this._getDb(),
           data = [];
 
-      db.allDocs({keys: ids, include_docs: true}, function(err, response) {
-        if (err) {
-          console.error(err);
-        } else {
-          if (response.rows) {
-            response.rows.forEach(function(row) {
-              data.push(row.doc);
+      data['type'] = type.typeKey;
+
+      return new Ember.RSVP.Promise(function(resolve, reject){
+        db.allDocs({keys: ids, include_docs: true}, function(err, response) {
+          if (err) {
+            err = self._errMsg(err);
+            Ember.run(null, reject, err);
+          } else {
+            if (response.rows) {
+              response.rows.forEach(function(row) {
+                if(!row["error"]){
+                  data.push(row.doc);
+                } else {
+                  console.log('cannot find', row.key +":", row.error);
+                }
+              });
+            }
+
+            var promises = Ember.A();
+            type.eachRelationship(function(accessor, relationship){
+              forEach(data, function(d){
+                var keys = d[accessor];
+                var type = relationship.type;
+                if(!Ember.isArray(keys)){
+                  keys = [keys];
+                };
+
+                //ignore all the cached records
+                keys = $.grep(keys, function(id){
+                  return store.hasRecordForId(type, id) === false;
+                });
+                if(!Ember.isEmpty(keys)){
+                  var promise = self.findMany(store, type, keys);
+                  promises.push(promise);
+                }
+              });
             });
-            self.didFindMany(store, type, data);
+
+            if(promises.length > 0){
+              Ember.run(null, function(data){
+                Ember.RSVP.all(promises).then(function(results){
+                  forEach(results, function(r){
+                    var type = r['type'];
+                    delete r['type'];
+                    var payload = [];
+                    payload[Ember.String.pluralize(Ember.String.decamelize(type))] = r;
+                    store.pushPayload(type, payload);
+                  });
+                  Ember.run(null, resolve, data);
+                });
+              }, data);
+            } else {
+              Ember.run(null, resolve, data);
+            }
           }
-        }
+        });
       });
     },
 
@@ -178,21 +238,28 @@
           db = this._getDb(),
           data = [];
 
-      db.query({map: function(doc) {
-        if (doc['emberDataType']) {
-          emit(doc['emberDataType'], null);
-        }
-      }}, {reduce: false, key: type.toString(), include_docs: true}, function(err, response) {
-        if (err) {
-          console.error(err);
-        } else {
-          if (response.rows) {
-            response.rows.forEach(function(row) {
-              data.push(row.doc);
-            });
-            self.didFindAll(store, type, data);
+      return new Ember.RSVP.Promise(function(resolve, reject){
+        db.query({map: function(doc) {
+          if (doc['emberDataType']) {
+            emit(doc['emberDataType'], null);
           }
-        }
+        }}, {reduce: false, key: type.typeKey, include_docs: true}, function(err, response) {
+          if (err) {
+            err = self._errMsg(err);
+            Ember.run(null, reject, err);
+          } else {
+            if (response.rows) {
+              response.rows.forEach(function(row) {
+                if(!row["error"]){
+                  data.push(row.doc);
+                } else {
+                  console.log('cannot find', row.key +":", row.error);
+                }
+              });
+            }
+            Ember.run(null, resolve, data);
+          }
+        });
       });
     },
 
@@ -200,6 +267,7 @@
       var self = this,
           db = this._getDb();
 
+      // select direct attributes only
       var keys = [];
       for (key in query) {
         if (query.hasOwnProperty(key)) {
@@ -221,15 +289,18 @@
             '}' +
           '}';
 
-      db.query({map: mapFn}, {reduce: false, key: [].concat(type.toString(), queryKeys), include_docs: true}, function(err, response) {
-        if (err) {
-          console.error(err);
-        } else {
-          if (response.rows) {
-            var data = response.rows.map(function(row) { return row.doc; });
-            self.didFindQuery(store, type, data, array);
+      return new Ember.RSVP.Promise(function(resolve, reject){
+        db.query({map: mapFn}, {reduce: false, key: [].concat(type.typeKey, queryKeys), include_docs: true}, function(err, response) {
+          if (err) {
+            err = self._errMsg(err);
+            Ember.run(null, reject, err);
+          } else {
+            if (response.rows) {
+              var data = Ember.A(response.rows).mapBy('doc');
+              Ember.run(null, resolve, data);
+            }
           }
-        }
+        });
       });
     },
 
@@ -246,7 +317,36 @@
         this.db = new PouchDB(this.databaseName || 'ember-application-db');
       }
       return this.db;
+    },
+
+    /**
+     * Formats PouchDB error hash
+     *
+     * @returns String
+     * @private
+     */
+    _errMsg: function(err){
+      return [err["status"], err["error"]+":", err["reason"]].join(" ");
     }
 
   });
+
+})();
+
+
+/**
+ * Registers PouchDB adapter and serializer to emberjs.
+ */
+(function() {
+Ember.onLoad('Ember.Application', function(Application) {
+  Application.initializer({
+    name: "PouchDBAdapter",
+
+    initialize: function(container, application) {
+      application.register('serializer:_pouchdb', DS.PouchDBSerializer);
+      application.register('adapter:_pouchdb', DS.PouchDBAdapter);
+    }
+  });
+});
+
 })();
