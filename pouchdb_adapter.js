@@ -81,6 +81,7 @@
    */
   DS.PouchDBAdapter = DS.Adapter.extend({
     defaultSerializer: "_pouchdb",
+    keysInFlight: [],
 
     /**
      Hook used by the store to generate client-side IDs. This simplifies
@@ -191,43 +192,9 @@
                 }
               });
             }
-
-            var promises = Ember.A();
-            type.eachRelationship(function(accessor, relationship){
-              forEach(data, function(d){
-                var keys = d[accessor];
-                var type = relationship.type;
-                if(!Ember.isArray(keys)){
-                  keys = [keys];
-                };
-
-                //ignore all the cached records
-                keys = $.grep(keys, function(id){
-                  return store.hasRecordForId(type, id) === false;
-                });
-                if(!Ember.isEmpty(keys)){
-                  var promise = self.findMany(store, type, keys);
-                  promises.push(promise);
-                }
-              });
-            });
-
-            if(promises.length > 0){
-              Ember.run(null, function(data){
-                Ember.RSVP.all(promises).then(function(results){
-                  forEach(results, function(r){
-                    var type = r['type'];
-                    delete r['type'];
-                    var payload = [];
-                    payload[Ember.String.pluralize(Ember.String.decamelize(type))] = r;
-                    store.pushPayload(type, payload);
-                  });
-                  Ember.run(null, resolve, data);
-                });
-              }, data);
-            } else {
+            self._preloadRelationships.call(self, store, type, data, function(){
               Ember.run(null, resolve, data);
-            }
+            });
           }
         });
       });
@@ -257,7 +224,9 @@
                 }
               });
             }
-            Ember.run(null, resolve, data);
+            self._preloadRelationships.call(self, store, type, data, function(){
+              Ember.run(null, resolve, data);
+            });
           }
         });
       });
@@ -297,7 +266,9 @@
           } else {
             if (response.rows) {
               var data = Ember.A(response.rows).mapBy('doc');
-              Ember.run(null, resolve, data);
+              self._preloadRelationships.call(self, store, type, data, function(){
+                Ember.run(null, resolve, data);
+              });
             }
           }
         });
@@ -305,6 +276,70 @@
     },
 
     // private
+
+    /**
+     * Preload relationship records
+     * @private
+     */
+    _preloadRelationships: function(store, type, data, done){
+      var self = this;
+
+      var promises = Ember.A();
+      type.eachRelationship(function(accessor, relationship){
+        forEach(data, function(d){
+          var keys = d[accessor];
+          var rtype = relationship.type;
+          if(!Ember.isArray(keys)){
+            keys = [keys];
+          };
+
+          //ignore all the cached records
+          keys = $.grep(keys, function(id){
+            var if_key = rtype.typeKey+"_"+id;
+            var notInFlight = $.inArray(if_key, self.keysInFlight) == -1;
+            if(store.hasRecordForId(rtype, id) === false && notInFlight){
+              self.keysInFlight.push(if_key);
+              return true;
+            }
+            return false;
+          });
+          //load unloaded relationship records from pouchDB
+          if(!Ember.isEmpty(keys)){
+            var promise = self.findMany(store, rtype, keys);
+            promises.push(promise);
+          }
+        });
+      });
+
+      if(promises.length > 0){
+        Ember.run(null, function(data){
+          Ember.RSVP.all(promises).then(function(results){
+            forEach(results, function(r){
+              var type = r['type'];
+              delete r['type'];
+              var payload = [];
+              payload[Ember.String.pluralize(Ember.String.decamelize(type))] = r;
+              store.pushPayload(type, payload);
+              r.forEach(function(k){
+                var ifpos = $.inArray(type+"_"+k.id, self.keysInFlight);
+                if(ifpos >= 0){
+                  delete self.keysInFlight[ifpos];
+                }
+              });
+
+            });
+            if((typeof done) == "function"){
+              done(data);
+            }
+          });
+        }, data);
+      } else {
+        if((typeof done) == "function"){
+          done(data);
+        }
+      }
+    },
+
 
     /**
      * Lazily create a PouchDB instance

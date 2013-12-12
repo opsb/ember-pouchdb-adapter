@@ -220,6 +220,33 @@ asyncTest('create and findAll', function() {
   });
 });
 
+asyncTest('create and findAll with hasMany', function() {
+  Ember.run(function(){
+    var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    var item = store.createRecord('item', { id: 'i1', name: 'one', list: list });
+
+    Ember.RSVP.all([item.save(), list.save()]).then(function() {
+      App.reset();
+      store.unloadAll('item');
+      store.unloadAll('list');
+
+      store.findAll('list').then(function(lists) {
+        equal(lists.get('length'), 1, 'findAll records should be loaded');
+        list = lists.content[0];
+        var items = list.get('items');
+        equal(items.get('length'), 1, 'hasMany items should be loaded');
+        start();
+      }, function(err){
+        ok(false, err);
+        start();
+      });
+    }, function(err){
+      ok(false, err);
+      start();
+    });
+  });
+});
+
 asyncTest('create and delete', function() {
   Ember.run(function(){
     var record = store.createRecord('list', { id: 'l1', name: 'one', b: true });
@@ -244,11 +271,40 @@ asyncTest('create and findQuery', function() {
       store.unloadAll('list');
 
       store.find('list', {name: 'two'}).then(function(result) {
+        equal(result.get('type').typeKey, 'list', 'findQuery should look for the correct type');
         equal(result.get('length'), 1, 'Record loaded');
         var content = result.get('content');
         equal(content[0].get('name'), 'two', 'Wrong record loaded');
         start();
       });
+    });
+  });
+});
+
+asyncTest('create and findQuery with hasMany', function() {
+  Ember.run(function(){
+    var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    var item = store.createRecord('item', { id: 'i1', name: 'one', list: list });
+
+    Ember.RSVP.all([item.save(), list.save()]).then(function() {
+      App.reset();
+      store.unloadAll('item');
+      store.unloadAll('list');
+
+      store.find('list', {name: 'one'}).then(function(lists) {
+        equal(lists.get('type').typeKey, 'list', 'findQuery should look for the correct type');
+        equal(lists.get('length'), 1, 'findQuery record should be loaded');
+        list = lists.content[0];
+        var items = list.get('items');
+        equal(items.get('length'), 1, 'hasMany items should be loaded');
+        start();
+      }, function(err){
+        ok(false, err);
+        start();
+      });
+    }, function(err){
+      ok(false, err);
+      start();
     });
   });
 });
