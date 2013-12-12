@@ -293,7 +293,13 @@
             keys = [keys];
           };
 
-          //ignore all the cached records
+          //exclude the main record from sideloading
+          var current_if_key = type.typeKey + "_" + d._id;
+          if($.inArray(current_if_key, self.keysInFlight) == -1){
+            self.keysInFlight.push(current_if_key);
+          }
+
+          //ignore all the cached and already sideloading records
           keys = $.grep(keys, function(id){
             var if_key = rtype.typeKey+"_"+id;
             var notInFlight = $.inArray(if_key, self.keysInFlight) == -1;
@@ -303,6 +309,7 @@
             }
             return false;
           });
+          
           //load unloaded relationship records from pouchDB
           if(!Ember.isEmpty(keys)){
             var promise = self.findMany(store, rtype, keys);
@@ -317,7 +324,7 @@
             forEach(results, function(r){
               var type = r['type'];
               delete r['type'];
-              var payload = [];
+              var payload = {};
               payload[Ember.String.pluralize(Ember.String.decamelize(type))] = r;
               store.pushPayload(type, payload);
               r.forEach(function(k){
