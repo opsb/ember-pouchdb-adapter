@@ -79,6 +79,27 @@ asyncTest('create and find', function() {
   });
 });
 
+asyncTest('create and find different models with same id', function() {
+
+  Ember.run(function(){
+    var record1 = store.createRecord('list', { id: 'o1', name: 'two', b: true});
+
+    var record2 = store.createRecord('item', { id: 'o1', name: 'one', list: record1 });
+
+    Ember.RSVP.all([record1.save(), record2.save()]).then(function() {
+      App.reset();
+
+      store.find('list', 'o1').then(function(list) {
+        equal(list.get('name'), 'two', 'List record should load');
+        store.find('item', 'o1').then(function(item) {
+          equal(item.get('name'), 'one', 'Item record should load');
+          start();
+        });
+      });
+    });
+  });
+});
+
 asyncTest('create with generated id', function() {
   Ember.run(function(){
     var record = store.createRecord('list', { name: 'one' });
@@ -273,6 +294,26 @@ asyncTest('create and findQuery', function() {
       store.find('list', {name: 'two'}).then(function(result) {
         equal(result.get('type').typeKey, 'list', 'findQuery should look for the correct type');
         equal(result.get('length'), 1, 'Record loaded');
+        var content = result.get('content');
+        equal(content[0].get('name'), 'two', 'Wrong record loaded');
+        start();
+      });
+    });
+  });
+});
+
+asyncTest('create and findQueryi by id', function() {
+  Ember.run(function(){
+    var list1 = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    var list2 = store.createRecord('list', { id: 'l2', name: 'two', b: false });
+
+    Ember.RSVP.all([list1.save(), list2.save()]).then(function() {
+      App.reset();
+      store.unloadAll('list');
+
+      store.find('list', {id: 'l2'}).then(function(result) {
+        equal(result.get('type').typeKey, 'list', 'findQuery should look for the correct type');
+        equal(result.get('length'), 1, 'Record should load');
         var content = result.get('content');
         equal(content[0].get('name'), 'two', 'Wrong record loaded');
         start();

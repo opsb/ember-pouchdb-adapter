@@ -1,5 +1,3 @@
-Ember.testing = true;
-
 App = Ember.Application.create();
 
 // App.rootElement = "#ember-testing";
@@ -14,8 +12,8 @@ Ember.onerror = function(error){
 }
 Ember.RSVP.configure('onerror', function(error) {
   console.log(error.stack);
-  start();
   ok(false, error);
+  start();
 });
 
 

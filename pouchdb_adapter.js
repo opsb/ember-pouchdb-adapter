@@ -18,7 +18,8 @@
       var json = this._super(record, options);
       json._rev = get(record, 'data')['_rev'];
       // Store the type in the value so that we can index it on read
-      json.emberDataType = Ember.String.decamelize(record.constructor.typeKey);
+      json['emberDataType'] = Ember.String.decamelize(record.constructor.typeKey);
+      json[get(this, 'primaryKey')] = get(record, 'id') + "_"+record.constructor.typeKey;
       return json;
     },
 
@@ -36,6 +37,9 @@
 
     normalize: function(type, hash) {
       hash.id = hash.id || hash._id;
+      if(hash.id && hash.id.endsWith("_"+type.typeKey)){
+        hash.id = hash['id'].split("_").slice(0, -1).join("_");
+      }
       delete hash._id;
 
       return this._super(type, hash);
@@ -43,6 +47,11 @@
 
     extractSingle: function(store, type, payload) {
       payload = this.normalize(type, payload);
+      type.eachRelationship(function(accessor, relationship){
+        if(relationship.kind == "hasMany" && payload[accessor]){
+          payload[accessor] = Ember.A(payload[accessor]);
+        }
+      });
 
       return this._super(store, type, payload);
     },
@@ -173,9 +182,12 @@
     findMany: function(store, type, ids) {
       var self = this,
           db = this._getDb(),
-          data = [];
+          data = Ember.A();
 
       data['type'] = type.typeKey;
+      ids = ids.map(function(id){
+        return id + "_" + type.typeKey;
+      });
 
       return new Ember.RSVP.Promise(function(resolve, reject){
         db.allDocs({keys: ids, include_docs: true}, function(err, response) {
@@ -192,7 +204,7 @@
                 }
               });
             }
-            self._preloadRelationships.call(self, store, type, data, function(){
+            self._preloadRelationships.call(self, store, type, data, function(data){
               Ember.run(null, resolve, data);
             });
           }
@@ -203,7 +215,7 @@
     findAll: function(store, type, sinceToken) {
       var self = this,
           db = this._getDb(),
-          data = [];
+          data = Ember.A();
 
       return new Ember.RSVP.Promise(function(resolve, reject){
         db.query({map: function(doc) {
@@ -224,7 +236,7 @@
                 }
               });
             }
-            self._preloadRelationships.call(self, store, type, data, function(){
+            self._preloadRelationships.call(self, store, type, data, function(data){
               Ember.run(null, resolve, data);
             });
           }
@@ -245,9 +257,13 @@
       }
 
       var emitKeys = keys.map(function(key) {
+        if(key == "id") key = "_id";
         return 'doc.' + key;
       });
       var queryKeys = keys.map(function(key) {
+        if(key == "_id" || key == "id") {
+          return query[key] + "_" + type.typeKey;
+        }
         return query[key];
       });
 
@@ -266,7 +282,7 @@
           } else {
             if (response.rows) {
               var data = Ember.A(response.rows).mapBy('doc');
-              self._preloadRelationships.call(self, store, type, data, function(){
+              self._preloadRelationships.call(self, store, type, data, function(data){
                 Ember.run(null, resolve, data);
               });
             }
@@ -294,14 +310,14 @@
           };
 
           //exclude the main record from sideloading
-          var current_if_key = type.typeKey + "_" + d._id;
+          var current_if_key = d._id;
           if($.inArray(current_if_key, self.keysInFlight) == -1){
             self.keysInFlight.push(current_if_key);
           }
 
           //ignore all the cached and already sideloading records
           keys = $.grep(keys, function(id){
-            var if_key = rtype.typeKey+"_"+id;
+            var if_key = id + "_" + rtype.typeKey;
             var notInFlight = $.inArray(if_key, self.keysInFlight) == -1;
             if(store.hasRecordForId(rtype, id) === false && notInFlight){
               self.keysInFlight.push(if_key);
@@ -309,7 +325,7 @@
             }
             return false;
           });
-          
+
           //load unloaded relationship records from pouchDB
           if(!Ember.isEmpty(keys)){
             var promise = self.findMany(store, rtype, keys);
@@ -328,7 +344,7 @@
               payload[Ember.String.pluralize(Ember.String.decamelize(type))] = r;
               store.pushPayload(type, payload);
               r.forEach(function(k){
-                var ifpos = $.inArray(type+"_"+k.id, self.keysInFlight);
+                var ifpos = $.inArray(k.id+"_"+type, self.keysInFlight);
                 if(ifpos >= 0){
                   delete self.keysInFlight[ifpos];
                 }
