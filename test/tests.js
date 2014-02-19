@@ -7,7 +7,6 @@ module('DS.PouchDBAdapter', {
 
   setup: function() {
     stop();
-
     PouchDB.destroy('ember-pouchdb-test', function() {
       start();
     });
@@ -17,21 +16,15 @@ module('DS.PouchDBAdapter', {
       name: DS.attr('string'),
       b: DS.attr('boolean'),
       tags: DS.attr(),
-      items: DS.hasMany('item')
+      items: DS.hasMany('item', {inverse: 'list'}),
+      asyncItems: DS.hasMany('item', {async: true, inverse: 'asyncList'})
     });
-
-    // App.List.toString = function() {
-    //   return 'App.List';
-    // };
 
     App.Item = DS.Model.extend({
       name: DS.attr('string'),
-      list: DS.belongsTo('list')
+      list: DS.belongsTo('list', {inverse: 'items'}),
+      asyncList: DS.belongsTo('list', {async: true, inverse: 'asyncItems'})
     });
-
-    // App.Item.toString = function() {
-    //   return 'App.Item';
-    // };
 
     App.ApplicationAdapter = DS.PouchDBAdapter.extend({
       databaseName: 'ember-pouchdb-test'
@@ -43,44 +36,49 @@ module('DS.PouchDBAdapter', {
 
   teardown: function() {
     App.reset();
-
-    list = null;
-    lists = null;
   }
 
 });
 
 test('existence', function() {
+  expect(1);
   ok(DS.PouchDBAdapter, 'PouchDBAdapter added to DS namespace');
 });
 
-asyncTest('create and find', function() {
-
+asyncTest('error reporting', function() {
+  expect(1);
   Ember.run(function(){
-    var record = store.createRecord('list', { id: 'l2', name: 'two', b: true});
-    record.save();
-
-    record = store.createRecord('list', { id: 'l1', name: 'one', b: true });
-
+    //provoke an error, as _l2 is not a valid id
+    var record = store.createRecord('list', { id: '_l2', name: 'two', b: true});
     record.save().then(function() {
-      App.reset();
-
-      store.find('list', 'l1').then(function(list) {
-        equal(list.get('name'), 'one', 'Record loaded');
-        start();
-      }, function(err){
-        ok(false, err);
-        start();
-      });
+      ok(false, 'should have thrown an error');
+      start();
     }, function(err){
-      ok(false, err);
+      ok(true, 'has thrown an error as intended');
       start();
     });
   });
 });
 
-asyncTest('create and find different models with same id', function() {
+asyncTest('create and find', function() {
+  expect(1);
+  Ember.run(function(){
+    var record1 = store.createRecord('list', { id: 'l2', name: 'two', b: true});
+    var record2 = store.createRecord('list', { id: 'l1', name: 'one', b: true });
 
+    Ember.RSVP.all([record1.save(), record2.save()]).then(function() {
+      App.reset();
+
+      store.find('list', 'l1').then(function(list) {
+        equal(list.get('name'), 'one', 'Record loaded');
+        start();
+      });
+    });
+  });
+});
+
+asyncTest('create and find different models with same id', function() {
+  expect(2);
   Ember.run(function(){
     var record1 = store.createRecord('list', { id: 'o1', name: 'two', b: true});
 
@@ -101,14 +99,12 @@ asyncTest('create and find different models with same id', function() {
 });
 
 asyncTest('create with generated id', function() {
+  expect(1);
   Ember.run(function(){
     var record = store.createRecord('list', { name: 'one' });
 
     record.save().then(function(response) {
       ok(response.get('id').length === 36, 'UUID assigned');
-      start();
-    }, function(err){
-      ok(false, err);
       start();
     });
   });
@@ -116,6 +112,7 @@ asyncTest('create with generated id', function() {
 });
 
 asyncTest('create and find with hasMany', function() {
+  expect(1);
   Ember.run(function(){
     var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
     var item = store.createRecord('item', { id: 'i1', name: 'one', list: list });
@@ -127,20 +124,58 @@ asyncTest('create and find with hasMany', function() {
 
       store.find('list', 'l1').then(function(list) {
         var items = list.get('items');
-        equal(items.get('length'), 1, 'hasMany items should be loaded');
-        start();
-      }, function(err){
-        ok(false, err);
+        equal(items.get('length'), 1, 'hasMany items should load');
         start();
       });
-    }, function(err){
-      ok(false, err);
-      start();
+    });
+  });
+});
+
+asyncTest('create and find with belongsTo', function() {
+  expect(2);
+  Ember.run(function(){
+    var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    var item = store.createRecord('item', { id: 'i1', name: 'one', list: list});
+
+    Ember.RSVP.all([list.save(), item.save()]).then(function() {
+      App.reset();
+      store.unloadAll('item');
+      store.unloadAll('list');
+
+      store.find('item', 'i1').then(function(item) {
+        var list = item.get('list');
+        ok(list, 'belongsTo item should load');
+        equal(list && list.get('id'), 'l1', 'belongsTo item should have its initial properties');
+        start();
+      });
+    });
+  });
+});
+
+asyncTest('create and find with async belongsTo', function() {
+  expect(2);
+  Ember.run(function(){
+    var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    var item = store.createRecord('item', { id: 'i1', name: 'one', asyncList: list});
+
+    Ember.RSVP.all([list.save(), item.save()]).then(function() {
+      App.reset();
+      store.unloadAll('item');
+      store.unloadAll('list');
+
+      store.find('item', 'i1').then(function(item) {
+        item.get('asyncList').then(function(list){
+          ok(list, 'belongsTo item should load');
+          equal(list && list.get('id'), 'l1', 'belongsTo item should have its initial properties');
+          start();
+        });
+      });
     });
   });
 });
 
 asyncTest('create and findMany', function() {
+  expect(1);
   Ember.run(function(){
     var list1 = store.createRecord('list', { id: 'l1', name: 'one', b: true });
     var list2 = store.createRecord('list', { id: 'l2', name: 'two', b: true });
@@ -151,22 +186,16 @@ asyncTest('create and findMany', function() {
       store.unloadAll('list');
 
       store.findByIds('list', ['l1', 'l3']).then(function(lists){
-        deepEqual(lists.mapBy('id'), ['l1', 'l3'], 'records with ids should be loaded');
-        start();
-      }, function(err){
-        ok(false, err);
+        deepEqual(lists.mapBy('id'), ['l1', 'l3'], 'records with ids should load');
         start();
       });
 
-    }, function(err){
-      ok(false, err);
-      start();
     });
-
   });
 });
 
 asyncTest('create and update', function() {
+  expect(1);
   Ember.run(function(){
     var record = store.createRecord('list', { id: 'l1', name: 'one', b: true });
 
@@ -183,6 +212,7 @@ asyncTest('create and update', function() {
 });
 
 asyncTest('create find and update', function() {
+  expect(1);
   Ember.run(function(){
     var record = store.createRecord('list', { id: 'l1', name: 'one', b: true });
 
@@ -204,6 +234,7 @@ asyncTest('create find and update', function() {
 });
 
 asyncTest('create and multiple update', function() {
+  expect(1);
   Ember.run(function(){
     var record = store.createRecord('list', { id: 'l1', name: 'one', b: true });
 
@@ -223,6 +254,7 @@ asyncTest('create and multiple update', function() {
 });
 
 asyncTest('create and findAll', function() {
+  expect(1);
   Ember.run(function(){
     item = store.createRecord('item', { id: 'i1', name: 'one' });
     list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
@@ -242,6 +274,7 @@ asyncTest('create and findAll', function() {
 });
 
 asyncTest('create and findAll with hasMany', function() {
+  expect(2);
   Ember.run(function(){
     var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
     var item = store.createRecord('item', { id: 'i1', name: 'one', list: list });
@@ -252,18 +285,91 @@ asyncTest('create and findAll with hasMany', function() {
       store.unloadAll('list');
 
       store.findAll('list').then(function(lists) {
-        equal(lists.get('length'), 1, 'findAll records should be loaded');
+        equal(lists.get('length'), 1, 'findAll records should load');
         list = lists.content[0];
         var items = list.get('items');
-        equal(items.get('length'), 1, 'hasMany items should be loaded');
-        start();
-      }, function(err){
-        ok(false, err);
+        equal(items.get('length'), 1, 'hasMany items should load');
         start();
       });
-    }, function(err){
-      ok(false, err);
-      start();
+    });
+  });
+});
+
+asyncTest('create and findAll with async hasMany via array', function() {
+  expect(2);
+  Ember.run(function(){
+    var item1 = store.createRecord('item', { id: 'i1', name: 'one' });
+    var item2 = store.createRecord('item', { id: 'i2', name: 'two' });
+    var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    list.get('asyncItems').set('content', Ember.A([item1]));
+
+    Ember.RSVP.all([list.save(), item1.save(), item2.save()]).then(function() {
+      App.reset();
+      store.unloadAll('item');
+      store.unloadAll('list');
+
+      store.findAll('list').then(function(lists) {
+        equal(lists.get('length'), 1, 'findAll records should load');
+        list = lists.content[0];
+        list.get('asyncItems').then(function(items){
+          equal(items.get('length'), 1, 'async hasMany items should load');
+          start();
+        });
+      });
+    });
+  });
+});
+
+asyncTest('create and findAll with async belongsTo', function() {
+  expect(3);
+  Ember.run(function(){
+    var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    var item1 = store.createRecord('item', { id: 'i1', name: 'one', asyncList: list });
+    var item2 = store.createRecord('item', { id: 'i2', name: 'two' });
+
+    Ember.RSVP.all([list.save(), item1.save(), item2.save()]).then(function() {
+      App.reset();
+      store.unloadAll('item');
+      store.unloadAll('list');
+
+      store.findAll('item').then(function(items) {
+        equal(items.get('length'), 2, 'findAll records should load');
+        item = items.content[0];
+        item.get('asyncList').then(function(list){
+          ok(list, 'async belongsTo item should load');
+          equal(list && list.get('id'), 'l1', 'async belongsTo item should have its initial properties');
+          start();
+        });
+      });
+    });
+  });
+});
+
+asyncTest('create and findAll with async hasMany', function() {
+  expect(4);
+  Ember.run(function(){
+    var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    var item1 = store.createRecord('item', { id: 'i1', name: 'one' });
+    var item2 = store.createRecord('item', { id: 'i2', name: 'two' });
+    item1.set('asyncList', list);
+    //seems like a bug in ember-data, do it until resolved
+    list.get('asyncItems').set('content', Ember.A([item1]));
+
+    Ember.RSVP.all([item1.save(), item2.save(), list.save()]).then(function() {
+      App.reset();
+      store.unloadAll('item');
+      store.unloadAll('list');
+
+      store.findAll('list').then(function(lists) {
+        equal(lists.get('length'), 1, 'findAll records should load');
+        list = lists.content[0];
+        equal(list && list.get('id'), 'l1', 'findAll items should load');
+        list.get('asyncItems').then(function(items){
+          ok(items, 'async hasMany item should be valid');
+          equal(items.get('length'), 1, 'async hasMany item should load');
+          start();
+        });
+      });
     });
   });
 });
@@ -273,8 +379,7 @@ asyncTest('create and delete', function() {
     var record = store.createRecord('list', { id: 'l1', name: 'one', b: true });
 
     record.save().then(function() {
-      record.deleteRecord();
-      record.save().then(function(record2) {
+      record.destroyRecord().then(function(record2) {
         ok(record2.get('isDeleted'), 'Record was updated');
         start();
       });
@@ -334,21 +439,120 @@ asyncTest('create and findQuery with hasMany', function() {
 
       store.find('list', {name: 'one'}).then(function(lists) {
         equal(lists.get('type').typeKey, 'list', 'findQuery should look for the correct type');
-        equal(lists.get('length'), 1, 'findQuery record should be loaded');
+        equal(lists.get('length'), 1, 'findQuery record should load');
         list = lists.content[0];
         var items = list.get('items');
-        equal(items.get('length'), 1, 'hasMany items should be loaded');
-        start();
-      }, function(err){
-        ok(false, err);
+        equal(items.get('length'), 1, 'hasMany items should load');
         start();
       });
-    }, function(err){
-      ok(false, err);
-      start();
     });
   });
 });
+
+asyncTest('delete a record with belongsTo relationship', function() {
+  expect(1);
+  Ember.run(function(){
+    var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    var item1 = store.createRecord('item', { id: 'i1', name: 'one' });
+    var item2 = store.createRecord('item', { id: 'i2', name: 'two' });
+    list.get('items').pushObject(item1);
+    // list.get('items').pushObject(item2);
+
+    Ember.RSVP.all([item1.save(), item2.save(), list.save()]).then(function() {
+      App.reset();
+      store.unloadAll('item');
+      store.unloadAll('list');
+      store.find('item', 'i1').then(function(item){
+        item.destroyRecord().then(function(){
+          App.reset();
+          store.unloadAll('item');
+          store.unloadAll('list');
+
+          store.find('list', 'l1').then(function(list){
+            equal(list.get('items.length'), 0, 'deleted relationships should not appear');
+            start();
+          });
+        });
+      });
+    });
+  });
+});
+
+asyncTest('delete a record with hasMany relationship', function() {
+  expect(1);
+  Ember.run(function(){
+    var item1 = store.createRecord('item', { id: 'i1', name: 'one' });
+    var item2 = store.createRecord('item', { id: 'i2', name: 'two' });
+    var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    list.get('items').pushObject(item1);
+
+    Ember.RSVP.all([item1.save(), item2.save(), list.save()]).then(function() {
+      App.reset();
+      store.unloadAll('item');
+      store.unloadAll('list');
+      store.find('list', 'l1').then(function(list){
+        list.destroyRecord().then(function(){
+          App.reset();
+          store.unloadAll('item');
+          store.unloadAll('list');
+
+          store.find('item', 'i1').then(function(item){
+            equal(item.get('list'), null, 'deleted relationship should not appear');
+            start();
+          });
+        });
+      });
+    });
+  });
+});
+
+asyncTest('change hasMany relationship', function() {
+  expect(4);
+  Ember.run(function(){
+    var item1 = store.createRecord('item', { id: 'i1', name: 'one' });
+    var item2 = store.createRecord('item', { id: 'i2', name: 'two' });
+    var list = store.createRecord('list', { id: 'l1', name: 'one', b: true });
+    list.get('items').pushObject(item1);
+
+    Ember.RSVP.all([item1.save(), item2.save(), list.save()]).then(function() {
+      App.reset();
+      store.unloadAll('item');
+      store.unloadAll('list');
+
+      Ember.RSVP.hash({
+        list: store.find('list', 'l1'),
+        item2: store.find('item', 'i2')
+      }).then(function(res){
+        list = res.list;
+        item2 = res.item2;
+        equal(list.get('items.firstObject.name'), 'one', "unchanged relationship should keep the original record");
+        list.get('items').clear();
+        list.get('items').pushObject(item2);
+
+        list.save().then(function(){
+          App.reset();
+          store.unloadAll('item');
+          store.unloadAll('list');
+
+          Ember.RSVP.hash({
+            list: store.find('list', 'l1'),
+            item1: store.find('item', 'i1'),
+            item2: store.find('item', 'i2')
+          }).then(function(res){
+            list = res.list;
+            item1 = res.item1;
+            item2 = res.item2;
+            equal(list.get('items.firstObject.name'), 'two', "changed relationship should reflect the change");
+            equal(item1.get('list.id'), null, "old relationship shouldn't exist");
+            equal(item2.get('list.id'), 'l1', "new relationship should exist");
+            start();
+          });
+        });
+      });
+    });
+  });
+});
+
 
 /*
 
