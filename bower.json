@@ -4,7 +4,7 @@
   "dependencies": {
     "ember": "~1",
     "ember-data": "~1.0.0",
-    "pouchdb": "master"
+    "pouchdb": "http://download.pouchdb.com/pouchdb-nightly.min.js"
   },
   "ignore": [
     "**/.*",
